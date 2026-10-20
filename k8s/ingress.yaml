@@ -1,0 +1,21 @@
+# Optional: requires an NGINX ingress controller
+#   Minikube:       minikube addons enable ingress
+#   Docker Desktop: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: heart-disease-api
+  namespace: heart-mlops
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: heart-api.local      # add "127.0.0.1 heart-api.local" (or minikube ip) to your hosts file
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: heart-disease-api
+                port:
+                  number: 80

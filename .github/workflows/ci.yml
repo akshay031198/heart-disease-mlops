@@ -1,0 +1,109 @@
+name: CI-CD Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: Lint (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install flake8==7.4.1
+      - name: Run flake8
+        run: flake8 heart_disease api tests scripts --count --statistics
+
+  test:
+    name: Unit tests (pytest)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run tests with coverage
+        run: |
+          pytest --cov=heart_disease --cov=api --cov-report=xml --cov-report=term \
+                 --junitxml=test-results/junit.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results/
+            coverage.xml
+
+  train:
+    name: Data + EDA + Model training
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Download & clean dataset
+        run: python -m heart_disease.download_data
+      - name: EDA
+        run: python -m heart_disease.eda
+      - name: Train models (MLflow tracking)
+        run: python -m heart_disease.train
+      - name: Inference check
+        run: python -m heart_disease.predict --input samples/sample_request.json
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model
+          path: models/
+      - name: Upload reports & MLflow runs
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-and-mlflow
+          path: |
+            reports/
+            mlruns/
+            mlflow.db
+            data/processed/
+
+  docker:
+    name: Docker build + smoke test
+    needs: train
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: model
+          path: models/
+      - name: Build image
+        run: docker build -t heart-disease-api:${{ github.sha }} -t heart-disease-api:latest .
+      - name: Run container
+        run: docker run -d --name heart-api -p 8000:8000 heart-disease-api:latest
+      - name: Smoke test /health and /predict
+        run: python3 scripts/smoke_test.py --url http://localhost:8000 --requests 5
+      - name: Container logs
+        if: always()
+        run: docker logs heart-api
+      - name: Save image as artifact
+        run: docker save heart-disease-api:latest | gzip > heart-disease-api.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: heart-disease-api.tar.gz
+          retention-days: 3
